@@ -1,0 +1,101 @@
+name: Deploy do Laboratório DevOps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      cenario:
+        description: Cenário do exercício
+        type: choice
+        default: sucesso
+        options:
+          - sucesso
+          - sem-checkout
+          - falha-validacao
+          - sem-index
+          - caminho-inexistente
+          - isolamento
+          - comando-inexistente
+
+permissions:
+  contents: read
+
+jobs:
+  validacao:
+    name: Validação do site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: inputs.cenario != 'sem-checkout'
+      - name: Explorando o Runner
+        run: |
+          lsb_release -a && free -h
+          nproc
+      - name: Forçar falha na validação
+        if: inputs.cenario == 'falha-validacao'
+        run: exit 1
+      - name: Renomear temporariamente o index
+        if: inputs.cenario == 'sem-index'
+        run: mv index.html index.html.bak
+      - name: Smoke test do index.html
+        run: |
+          test -f index.html
+          echo 'index.html encontrado'
+
+  instalar-ferramenta:
+    name: Instalar cowsay em outro runner
+    if: inputs.cenario == 'isolamento'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar e executar cowsay
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cowsay
+          /usr/games/cowsay 'Instalado neste runner'
+
+  preparar-artefato:
+    name: Preparar artefato do Pages
+    needs: validacao
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testar caminho inexistente
+        if: inputs.cenario == 'caminho-inexistente'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './pasta-inexistente'
+      - name: Publicar artefato github-pages
+        if: inputs.cenario != 'caminho-inexistente'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+  publicar-site:
+    name: Publicar site
+    needs: [validacao, preparar-artefato, instalar-ferramenta]
+    if: |
+      ${{ !cancelled() &&
+          needs.validacao.result == 'success' &&
+          needs.preparar-artefato.result == 'success' &&
+          (needs.instalar-ferramenta.result == 'success' ||
+           needs.instalar-ferramenta.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Testar isolamento dos jobs
+        if: inputs.cenario == 'isolamento'
+        run: /usr/games/cowsay 'Este runner tem a ferramenta?'
+      - name: Executar comando inexistente
+        if: inputs.cenario == 'comando-inexistente'
+        run: comando_que_nao_existe
+      - name: Deploy no GitHub Pages
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.cenario == 'sucesso')
+        id: deployment
+        uses: actions/deploy-pages@v4
